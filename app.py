@@ -29,27 +29,32 @@ def fetch_all_data():
                 continue
 
             # 日付の解析
-            pub_date = datetime(*entry.published_parsed[:6])
+            pub_dt = datetime(*entry.published_parsed[:6])
+            pub_date_str = pub_dt.date().isoformat()
             
             # 企業名の抽出
             company_match = re.search(r'([^\s　]+(?:株式会社|合同会社|有限会社)[^\s　]*)', title)
             company_name = company_match.group(0) if company_match else title[:10]
 
+            # カレンダーに渡すデータ（JSON形式に変換可能なものだけに絞る）
             event = {
-                "title": f"({label[0]}) {company_name}", # カレンダー上は短く
-                "start": pub_date.date().isoformat(),
-                "full_title": f"[{label}] {title}",
+                "title": f"{company_name}", 
+                "start": pub_date_str,
                 "url": entry.link,
-                "summary": summary,
-                "source": label,
-                "company": company_name,
-                "pub_datetime": pub_date,
-                "color": "#FF5722" if "資金調達" in label else "#4CAF50"
+                "color": "#FF5722" if "資金調達" in label else "#4CAF50",
+                # 以下の独自データは「extendedProps」に入れるのがカレンダーのルール
+                "extendedProps": {
+                    "full_title": f"[{label}] {title}",
+                    "summary": summary,
+                    "source": label,
+                    "company": company_name,
+                    "pub_iso": pub_dt.isoformat() # datetimeオブジェクトではなく文字列にする
+                }
             }
             all_events.append(event)
             
-            if company_name not in company_history or pub_date < company_history[company_name]:
-                company_history[company_name] = pub_date
+            if company_name not in company_history or pub_dt.isoformat() < company_history[company_name]:
+                company_history[company_name] = pub_dt.isoformat()
 
     return all_events, company_history
 
@@ -58,22 +63,16 @@ all_events, company_history = fetch_all_data()
 
 st.title("🚀 中小・スタートアップ B2Bレーダー")
 
-# 1. カレンダー表示（ここを修正しました）
+# 1. カレンダー表示
 st.header("📅 ニュースカレンダー")
-st.caption("日付をクリックすると、その下の「詳細一覧」が切り替わります")
-
 calendar_options = {
     "initialView": "dayGridMonth",
-    "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,dayGridWeek"},
     "selectable": True,
     "locale": "ja",
 }
-
-# カレンダーの実行
 state = calendar(events=all_events, options=calendar_options, key="news_calendar")
 
 # 2. 日付の決定ロジック
-# カレンダーがクリックされたらその日を、そうでなければ今日を選択
 selected_date_str = str(date.today())
 if state.get("dateClick"):
     selected_date_str = state["dateClick"]["date"].split("T")[0]
@@ -83,21 +82,20 @@ st.divider()
 # 3. ニュース詳細一覧
 st.header(f"📌 {selected_date_str} のニュース一覧")
 
-# 選択された日付に一致する記事をフィルタ
 target_news = [e for e in all_events if e['start'] == selected_date_str]
-# 資金調達を優先
-target_news.sort(key=lambda x: "資金調達" in x['source'], reverse=True)
+target_news.sort(key=lambda x: "資金調達" in x['extendedProps']['source'], reverse=True)
 
 if not target_news:
-    st.info(f"{selected_date_str} の該当ニュースはありません。カレンダーから他の日を選んでください。")
+    st.info(f"{selected_date_str} の該当ニュースはありません。")
 else:
     for item in target_news:
+        props = item['extendedProps']
         # NEW判定
-        is_new = item['pub_datetime'] <= company_history.get(item['company'], item['pub_datetime'])
+        is_new = props['pub_iso'] <= company_history.get(props['company'], props['pub_iso'])
         new_badge = "🔴 [NEW!] " if is_new else ""
         
-        with st.expander(f"{new_badge}{item['full_title']}", expanded=is_new):
-            st.markdown(f"**企業名:** {item['company']}")
-            st.markdown(f"**媒体:** {item['source']}")
-            st.write(f"**内容:** {item['summary'][:300]}...")
+        with st.expander(f"{new_badge}{props['full_title']}", expanded=is_new):
+            st.markdown(f"**企業名:** {props['company']}")
+            st.markdown(f"**媒体:** {props['source']}")
+            st.write(f"**内容:** {props['summary'][:300]}...")
             st.markdown(f"🔗 [この記事を詳しく見る]({item['url']})")
