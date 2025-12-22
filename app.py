@@ -2,22 +2,26 @@ import streamlit as st
 import feedparser
 from streamlit_calendar import calendar
 from datetime import datetime, date
-import pandas as pd
+import re
 
-st.set_page_config(layout="wide", page_title="B2B Startup Radar")
+st.set_page_config(layout="wide", page_title="中小・スタートアップ B2B Radar")
 
-# --- 設定：BtoBに特化したソースとフィルタ ---
+# --- 設定：中小・中堅・スタートアップに特化したソース ---
 SOURCES = {
-    "PR TIMES (B2B/DX)": "https://prtimes.jp/main/html/index/category_id/44/rdf.xml",
-    "THE BRIDGE (Startup)": "https://thebridge.jp/feed",
-    "Google News (法人向け資金調達)": "https://news.google.com/rss/search?q=法人向け+OR+B2B+OR+SaaS+OR+DX+資金調達+when:7d&hl=ja&gl=JP&ceid=JP:ja"
+    "🚀 スタートアップ(PR TIMES)": "https://prtimes.jp/main/html/index/category_id/44/rdf.xml",
+    "💰 資金調達(THE BRIDGE)": "https://thebridge.jp/feed",
+    "🔍 中小・ベンチャー(Google News)": "https://news.google.com/rss/search?q=(株式会社+OR+合同会社)+(資金調達+OR+SaaS+OR+DX+OR+新サービス)+-NTT+-トヨタ+-ソフトバンク+-ソニー+-日立+-楽天+when:7d&hl=ja&gl=JP&ceid=JP:ja"
 }
 
-# toC向けを排除する除外キーワード設定（必要に応じて調整してください）
-EXCLUDE_KEYWORDS = ["スイーツ", "コスメ", "アパレル", "ゲーム", "個人向け", "おもちゃ", "タレント"]
+# 除外設定：大手企業やtoC向けワード
+EXCLUDE_KEYWORDS = [
+    "東証プライム", "メガバンク", "大手銀行", "上場企業", # 大手関連
+    "NTT", "トヨタ", "TOYOTA", "ソフトバンク", "SoftBank", "ソニー", "SONY", "パナソニック", # 具体的な大手名
+    "スイーツ", "コスメ", "アパレル", "ゲーム", "個人向け", "おもちゃ", "美容液" # toC
+]
 
 @st.cache_data(ttl=3600)
-def fetch_and_filter_news():
+def fetch_startup_news():
     today_news = []
     all_events = []
     today = date.today()
@@ -27,10 +31,9 @@ def fetch_and_filter_news():
         for entry in feed.entries:
             title = entry.title
             summary = entry.get("description", "概要なし")
-            # HTMLタグの除去（簡易的）
             summary = summary.replace("<br />", "\n").split("続きを読む")[0]
             
-            # B2Bフィルタリング：除外ワードが含まれていたらスキップ
+            # 大手除外フィルタリング
             if any(word in title or word in summary for word in EXCLUDE_KEYWORDS):
                 continue
 
@@ -45,45 +48,42 @@ def fetch_and_filter_news():
                 "summary": summary,
                 "source": label,
                 "allDay": True,
-                "backgroundColor": "#1E3A8A" if is_today else "#3D5A80"
+                "backgroundColor": "#FF5722" if "資金調達" in label else "#4CAF50" # 資金調達はオレンジ、他は緑
             }
             
             all_events.append(event)
             if is_today:
-                today_news.append(event)
+                # 資金調達やスタートアップカテゴリの情報をリストの先頭に入れる
+                if "資金調達" in label or "スタートアップ" in label:
+                    today_news.insert(0, event)
+                else:
+                    today_news.append(event)
                 
     return today_news, all_events
 
 # --- UI表示 ---
-st.title("🚀 B2B Startup & Finance Radar")
-st.caption(f"最終更新: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+st.title("🚀 中小・スタートアップ B2Bレーダー")
+st.caption("大手を除外した、日本国内の若い会社・中堅企業の最新情報を集約")
 
-today_list, calendar_events = fetch_and_filter_news()
+today_list, calendar_events = fetch_startup_news()
 
-# 1. 本日の注目ニュース（最初に見れるように配置）
-st.header("📌 本日のB2Bニュース")
+# 1. 本日の注目ニュース（若い会社・資金調達を優先）
+st.header("📌 本日の新興企業ニュース")
 if not today_list:
-    st.write("本日の該当ニュースはまだありません。")
+    st.info("本日、該当するニュースはまだありません。")
 else:
     for item in today_list:
-        with st.expander(f"【{item['source']}】{item['title']}"):
-            st.write(f"**概要:** {item['summary'][:300]}...") # 冒頭のみ表示
-            st.markdown(f"[📎 記事全文を読む]({item['url']})")
+        with st.expander(f"{item['title']}"):
+            st.markdown(f"**媒体:** {item['source']}")
+            st.write(f"**内容:** {item['summary'][:300]}...")
+            st.markdown(f"🔗 [この記事を詳しく見る]({item['url']})")
 
 st.divider()
 
-# 2. カレンダー表示（過去分を振り返る用）
-st.header("📅 ニュースカレンダー")
+# 2. カレンダー
+st.header("📅 過去の履歴")
 calendar_options = {
     "initialView": "dayGridMonth",
     "locale": "ja",
-    "headerToolbar": {"left": "prev,next today", "center": "title", "right": "dayGridMonth,listMonth"}
 }
-
-state = calendar(events=calendar_events, options=calendar_options)
-
-if state.get("eventClick"):
-    event_data = state["eventClick"]["event"]
-    st.sidebar.subheader("選択した記事の詳細")
-    st.sidebar.write(event_data["title"])
-    st.sidebar.markdown(f"[記事を開く]({event_data['url']})")
+calendar(events=calendar_events, options=calendar_options)
