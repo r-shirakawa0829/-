@@ -6,7 +6,11 @@ import re
 
 st.set_page_config(layout="wide", page_title="中小・スタートアップ B2B Radar")
 
-# --- ソースと除外ワードの設定 ---
+# --- セッション状態の初期化（反応を良くするため） ---
+if "selected_date" not in st.session_state:
+    st.session_state.selected_date = str(date.today())
+
+# --- ニュース取得設定 ---
 SOURCES = {
     "🚀 スタートアップ(PR TIMES)": "https://prtimes.jp/main/html/index/category_id/44/rdf.xml",
     "💰 資金調達(THE BRIDGE)": "https://thebridge.jp/feed",
@@ -18,7 +22,6 @@ EXCLUDE_KEYWORDS = ["東証プライム", "メガバンク", "上場企業", "NT
 def fetch_all_data():
     all_events = []
     company_history = {}
-    
     for label, url in SOURCES.items():
         feed = feedparser.parse(url)
         for entry in feed.entries:
@@ -26,22 +29,16 @@ def fetch_all_data():
             summary = entry.get("description", "概要なし").replace("<br />", "\n").split("続きを読む")[0]
             if any(word in title or word in summary for word in EXCLUDE_KEYWORDS):
                 continue
-
-            # 日付を確実に「文字列」にする
             pub_dt = datetime(*entry.published_parsed[:6])
             date_str = pub_dt.strftime('%Y-%m-%d')
             iso_str = pub_dt.isoformat()
-            
-            # 企業名の抽出
             company_match = re.search(r'([^\s　]+(?:株式会社|合同会社|有限会社)[^\s　]*)', title)
             company_name = company_match.group(0) if company_match else title[:10]
 
-            # カレンダーへ渡すデータは最小限の「文字列のみ」にする（エラー防止）
             event = {
                 "title": f"{company_name}", 
                 "start": date_str,
                 "color": "#FF5722" if "資金調達" in label else "#4CAF50",
-                # 詳細データ
                 "extendedProps": {
                     "full_title": str(title),
                     "summary": str(summary),
@@ -52,50 +49,52 @@ def fetch_all_data():
                 }
             }
             all_events.append(event)
-            
             if company_name not in company_history or iso_str < company_history[company_name]:
                 company_history[company_name] = iso_str
-
     return all_events, company_history
 
-# --- アプリの表示 ---
 all_events, company_history = fetch_all_data()
 
 st.title("🚀 中小・スタートアップ B2Bレーダー")
 
-# 1. カレンダー
+# --- サイドバーで補助的な日付選択 ---
+with st.sidebar:
+    st.header("日付選択（補助）")
+    side_date = st.date_input("カレンダーの反応が悪い時はこちら", value=date.fromisoformat(st.session_state.selected_date))
+    if str(side_date) != st.session_state.selected_date:
+        st.session_state.selected_date = str(side_date)
+        st.rerun()
+
+# --- メイン：カレンダー表示 ---
+st.header("📅 ニュースカレンダー")
 calendar_options = {
     "initialView": "dayGridMonth",
     "selectable": True,
     "locale": "ja",
 }
-# keyを毎回変えないように固定し、データを確実に文字列のみで渡す
-state = calendar(events=all_events, options=calendar_options, key="b2b_news_calendar")
+state = calendar(events=all_events, options=calendar_options, key="b2b_calendar")
 
-# 2. 表示する日付の判定
-selected_date = str(date.today())
+# カレンダーのクリックを検知
 if state.get("dateClick"):
-    selected_date = state["dateClick"]["date"].split("T")[0]
+    clicked = state["dateClick"]["date"].split("T")[0]
+    if clicked != st.session_state.selected_date:
+        st.session_state.selected_date = clicked
+        st.rerun()
 
 st.divider()
 
-# 3. ニュース詳細一覧
-st.header(f"📌 {selected_date} のニュース一覧")
-
-# 選択された日付の記事をフィルタ
-target_news = [e for e in all_events if e['start'] == selected_date]
-# 資金調達を優先
+# --- ニュース詳細一覧 ---
+st.header(f"📌 {st.session_state.selected_date} のニュース一覧")
+target_news = [e for e in all_events if e['start'] == st.session_state.selected_date]
 target_news.sort(key=lambda x: "資金調達" in x['extendedProps']['source'], reverse=True)
 
 if not target_news:
-    st.info(f"{selected_date} の該当ニュースはありません。カレンダーから他の日を選択してください。")
+    st.info(f"{st.session_state.selected_date} のニュースはありません。他の日を選んでください。")
 else:
     for item in target_news:
         p = item['extendedProps']
-        # NEW判定
         is_new = p['pub_iso'] <= company_history.get(p['company'], p['pub_iso'])
         badge = "🔴 [NEW!] " if is_new else ""
-        
         with st.expander(f"{badge}[{p['source']}] {p['full_title']}", expanded=is_new):
             st.markdown(f"**企業名:** {p['company']}")
             st.write(f"**内容:** {p['summary'][:300]}...")
