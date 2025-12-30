@@ -74,11 +74,14 @@ with col2:
             date_text = "\n".join([f"・{d}" for d in dates])
 
             magic_prompt = f"""あなたは一流コンサルです。以下を分析しアライアンス提案メールを作って。
+
 企業名: {p['company']}
 URL: {p['url']}
 内容: {p['summary']}
+
 【強み】全国13万社の経営者ネットワーク、数千万の利益支援可
 【資料】https://docs.google.com/presentation/d/1JeqlwgvQ4uSaDEtVVdrj9-ju7EpXhKOK/edit
+
 【日程】
 {date_text}
 """
