@@ -3,21 +3,12 @@ import feedparser
 from streamlit_calendar import calendar
 from datetime import datetime, date, timedelta
 import re
-import google.generativeai as genai
 
-st.set_page_config(layout="wide", page_title="B2B Radar & AI Outreach")
+st.set_page_config(layout="wide", page_title="B2B Radar | Prompt Generator")
 
-# --- AI設定 ---
-if "GEMINI_API_KEY" in st.secrets:
-    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-else:
-    st.warning("Secretsに GEMINI_API_KEY を登録してください。")
-
-# --- 【重要】セッション状態（メモリ）の管理 ---
+# --- セッション状態管理 ---
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = str(date.today())
-if "ai_results" not in st.session_state:
-    st.session_state.ai_results = {}
 
 # --- ニュース取得 ---
 @st.cache_data(ttl=3600)
@@ -54,83 +45,63 @@ def fetch_b2b_news():
 all_events = fetch_b2b_news()
 
 # --- メインレイアウト ---
-st.title("🚀 B2Bスタートアップ分析 & 提案ツール")
+st.title("🚀 B2B Radar & Prompt Generator")
 
 col1, col2 = st.columns([1, 1.2])
 
 with col1:
-    st.header("📅 ニュースカレンダー")
-    # keyを固定して反応を安定させます
-    cal = calendar(events=all_events, options={"initialView": "dayGridMonth", "locale": "ja"}, key="b2b_calendar_main")
-    
-    # --- 【解決】日付クリックの反応を強制的に同期させるロジック ---
+    st.header("📅 カレンダー")
+    cal = calendar(events=all_events, options={"initialView": "dayGridMonth", "locale": "ja"}, key="main_cal")
     if cal.get("dateClick"):
-        clicked_date = cal["dateClick"]["date"].split("T")[0]
-        if clicked_date != st.session_state.selected_date:
-            st.session_state.selected_date = clicked_date
-            st.rerun() # 強制再描画で即座に右側を更新
+        clicked = cal["dateClick"]["date"].split("T")[0]
+        if clicked != st.session_state.selected_date:
+            st.session_state.selected_date = clicked
+            st.rerun()
 
 with col2:
     st.header(f"📌 {st.session_state.selected_date} の掲載企業")
     items = [e for e in all_events if e['start'] == st.session_state.selected_date]
     
-    if not items:
-        st.info("この日のニュースはありません。")
-    
     for item in items:
         p = item['extendedProps']
-        # 過去のAI生成結果があるかチェック
-        has_ai_result = p['url'] in st.session_state.ai_results
-        
-        # タイトルにAI済みマークをつける
-        label = f"✅ [{p['source']}] {p['full_title']}" if has_ai_result else f"[{p['source']}] {p['full_title']}"
-        
-        with st.expander(label):
+        with st.expander(f"[{p['source']}] {p['full_title']}"):
             st.write(f"**企業名:** {p['company']}")
             st.markdown(f"🔗 [記事原文を表示]({p['url']})")
             
-            btn_key = f"btn_{p['url']}"
+            # --- プロンプト作成ロジック ---
+            today = date.today()
+            dates = []
+            check_day = today + timedelta(days=2)
+            while len(dates) < 5:
+                if check_day.weekday() < 5: dates.append(check_day.strftime("%m月%d日（%a）09:00～18:00"))
+                check_day += timedelta(days=1)
+            date_text = "\n".join([f"・{d}" for d in dates])
+
+            # Geminiに投げれば完成する魔法の指示文
+            magic_prompt = f"""あなたは、企業のビジネスモデルと哲学を見抜く超一流のビジネスアナリスト兼コンサルタントです。
+以下の情報に基づき、ステップに従ってアライアンス提案メールを作成してください。
+
+1. 分析対象
+企業名: {p['company']}
+記事URL: {p['url']}
+記事内容: {p['summary']}
+
+2. 私たちの強み
+・全国13万社の経営者ネットワーク
+・提携により数千万以上の利益確保を支援可能
+・資料: https://docs.google.com/presentation/d/1JeqlwgvQ4uSaDEtVVdrj9-ju7EpXhKOK/edit
+
+3. 実行ステップ
+ステップ0：認識合わせ（太字一文で要約）
+ステップA：ビジネス分析（サービス概要、ターゲット、経営ペインポイント）
+ステップB：メールパーツ（心を掴む冒頭文3案、悩みリスト3つ）
+ステップC：メール完成形（以下日程案を必ず含むこと）
+
+【日程案】
+{date_text}
+"""
             
-            if st.button(f"📧 AI提案メールを生成", key=btn_key):
-                # 日程提案の自動計算
-                today = date.today()
-                dates = []
-                check_day = today + timedelta(days=2)
-                while len(dates) < 5:
-                    if check_day.weekday() < 5: dates.append(check_day.strftime("%m月%d日（%a）09:00～18:00"))
-                    check_day += timedelta(days=1)
-                date_text = "\n".join([f"・{d}" for d in dates])
-
-                prompt = f"""
-                あなたは超一流のコンサルタントです。企業 {p['company']} ({p['url']}) を分析し、アライアンス提案メールを作成してください。
-                13万社の経営者ネットワークを持つ我々との提携メリットを強調し、以下の日程案を含めてください：
-                {date_text}
-                
-                資料URL: https://docs.google.com/presentation/d/1JeqlwgvQ4uSaDEtVVdrj9-ju7EpXhKOK/edit
-                ステップに沿って深く分析し、最後にメール完成形を出力してください。
-                """
-
-                st.divider()
-                st.subheader(f"🤖 {p['company']} の分析結果")
-                placeholder = st.empty()
-                full_response = ""
-                
-                try:
-                    model = genai.GenerativeModel('gemini-1.5-flash')
-                    # ストリーミング表示
-                    for chunk in model.generate_content(prompt, stream=True):
-                        full_response += chunk.text
-                        placeholder.markdown(full_response + "▌")
-                    
-                    placeholder.markdown(full_response)
-                    # メモリに保存
-                    st.session_state.ai_results[p['url']] = full_response
-                except Exception as e:
-                    st.error(f"エラーが発生しました: {e}")
-
-            # 既に結果がある場合は表示
-            elif has_ai_result:
-                st.divider()
-                st.info("生成済みの提案があります")
-                st.markdown(st.session_state.ai_results[p['url']])
-                st.text_area("コピペ用", value=st.session_state.ai_results[p['url']], height=300, key=f"text_{p['url']}")
+            st.info("下のボタンを押して、コピーした内容をGeminiに貼り付けてください。")
+            # コピペ用のテキストエリア
+            st.text_area("Gemini用プロンプト", value=magic_prompt, height=200, key=f"p_{p['url']}")
+            st.caption("※上の枠内の文字を全選択(Ctrl+A)してコピーしてください。"
