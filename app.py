@@ -1,49 +1,89 @@
 import streamlit as st
 import feedparser
 from streamlit_calendar import calendar
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import re
 
-st.set_page_config(layout="wide", page_title="中小・スタートアップ B2B Radar")
+st.set_page_config(layout="wide", page_title="B2B Radar")
 
-# --- セッション状態（メモリ）の初期化 ---
+# --- セッション状態管理 ---
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = str(date.today())
 
-# --- データ取得ロジック（キャッシュ付き） ---
+# --- ニュース取得 ---
 @st.cache_data(ttl=3600)
-def fetch_news_data():
-    # 前回のコードと同じニュース取得ロジック
-    # (中身は省略しませんが、動作を軽くするためそのまま保持してください)
+def fetch_b2b_news():
+    feeds = {
+        "🚀 PR TIMES": "https://prtimes.jp/main/html/index/category_id/44/rdf.xml",
+        "💰 THE BRIDGE": "https://thebridge.jp/feed",
+        "🔍 Google News": "https://news.google.com/rss/search?q=(株式会社+OR+合同会社)+(資金調達+OR+SaaS+OR+DX)+-NTT+-トヨタ+-ソフトバンク+-ソニー+when:7d&hl=ja&gl=JP&ceid=JP:ja"
+    }
     all_events = []
-    # ... (ニュース取得処理) ...
+    for source_name, url in feeds.items():
+        feed = feedparser.parse(url)
+        for entry in feed.entries:
+            title = entry.title
+            if any(x in title for x in ["東証", "メガバンク", "大企業", "スイーツ", "コスメ"]): continue
+            pub_dt = datetime(*entry.published_parsed[:6])
+            date_str = pub_dt.strftime('%Y-%m-%d')
+            company_match = re.search(r'([^\s　]+(?:株式会社|合同会社|有限会社)[^\s　]*)', title)
+            company_name = company_match.group(0) if company_match else title[:10]
+            
+            all_events.append({
+                "title": company_name,
+                "start": date_str,
+                "extendedProps": {
+                    "full_title": title,
+                    "summary": entry.get("description", "").replace("<br />", " ").split("続きを読む")[0],
+                    "url": entry.link,
+                    "source": source_name,
+                    "company": company_name
+                }
+            })
     return all_events
 
-all_events = fetch_news_data()
+all_events = fetch_b2b_news()
 
-st.title("🚀 中小・スタートアップ B2Bレーダー")
+# --- メインレイアウト ---
+st.title("🚀 B2B Radar & Prompt Generator")
 
-# --- メイン：カレンダー表示 ---
-st.header("📅 ニュースカレンダー")
-calendar_options = {
-    "initialView": "dayGridMonth",
-    "selectable": True,
-    "locale": "ja",
-}
+col1, col2 = st.columns([1, 1.2])
 
-# カレンダー部品の呼び出し。keyを固定するのがコツです
-state = calendar(events=all_events, options=calendar_options, key="fixed_b2b_calendar")
+with col1:
+    st.header("📅 カレンダー")
+    cal = calendar(events=all_events, options={"initialView": "dayGridMonth", "locale": "ja"}, key="main_cal")
+    if cal.get("dateClick"):
+        clicked = cal["dateClick"]["date"].split("T")[0]
+        if clicked != st.session_state.selected_date:
+            st.session_state.selected_date = clicked
+            st.rerun()
 
-# --- クリック反応の強化ロジック ---
-if state.get("dateClick"):
-    clicked_date = state["dateClick"]["date"].split("T")[0]
-    # 今選んでいる日付と違う日がクリックされたら、メモリを書き換えて強制再描画
-    if clicked_date != st.session_state.selected_date:
-        st.session_state.selected_date = clicked_date
-        st.rerun()  # これで即座に下のリストが更新されます
+with col2:
+    st.header(f"📌 {st.session_state.selected_date} の掲載企業")
+    items = [e for e in all_events if e['start'] == st.session_state.selected_date]
+    
+    for item in items:
+        p = item['extendedProps']
+        with st.expander(f"[{p['source']}] {p['full_title']}"):
+            st.write(f"**企業名:** {p['company']}")
+            st.markdown(f"🔗 [記事原文を表示]({p['url']})")
+            
+            # 日程作成
+            today = date.today()
+            dates = [ (today + timedelta(days=i)).strftime("%m月%d日（%a）09:00～18:00") for i in range(2, 7) if (today + timedelta(days=i)).weekday() < 5]
+            date_text = "\n".join([f"・{d}" for d in dates])
 
-st.divider()
+            magic_prompt = f"""あなたは一流コンサルです。以下を分析しアライアンス提案メールを作って。
 
-# --- ニュース詳細一覧 ---
-st.header(f"📌 {st.session_state.selected_date} の詳細一覧")
-# ... (フィルタリングと表示処理) ...
+企業名: {p['company']}
+URL: {p['url']}
+内容: {p['summary']}
+
+【強み】全国13万社の経営者ネットワーク、数千万の利益支援可
+【資料】https://docs.google.com/presentation/d/1JeqlwgvQ4uSaDEtVVdrj9-ju7EpXhKOK/edit
+
+【日程】
+{date_text}
+"""
+            st.text_area("Geminiに貼り付ける指示文", value=magic_prompt, height=250, key=f"p_{p['url']}")
+            st.caption("全選択してコピーし、Geminiに貼り付けてください。")
