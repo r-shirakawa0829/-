@@ -4,6 +4,7 @@ from streamlit_calendar import calendar
 from datetime import datetime, date, timedelta
 import re
 
+# レイアウト設定
 st.set_page_config(layout="wide", page_title="B2B Radar")
 
 # --- セッション状態管理 ---
@@ -23,9 +24,15 @@ def fetch_b2b_news():
         feed = feedparser.parse(url)
         for entry in feed.entries:
             title = entry.title
-            if any(x in title for x in ["東証", "メガバンク", "大企業", "スイーツ", "コスメ"]): continue
+            # 除外キーワード
+            if any(x in title for x in ["東証", "メガバンク", "大企業", "スイーツ", "コスメ"]):
+                continue
+            
+            # 日付処理
             pub_dt = datetime(*entry.published_parsed[:6])
             date_str = pub_dt.strftime('%Y-%m-%d')
+            
+            # 会社名抽出（正規表現）
             company_match = re.search(r'([^\s　]+(?:株式会社|合同会社|有限会社)[^\s　]*)', title)
             company_name = company_match.group(0) if company_match else title[:10]
             
@@ -52,6 +59,8 @@ col1, col2 = st.columns([1, 1.2])
 with col1:
     st.header("📅 カレンダー")
     cal = calendar(events=all_events, options={"initialView": "dayGridMonth", "locale": "ja"}, key="main_cal")
+    
+    # クリックイベントの検知
     if cal.get("dateClick"):
         clicked = cal["dateClick"]["date"].split("T")[0]
         if clicked != st.session_state.selected_date:
@@ -62,15 +71,25 @@ with col2:
     st.header(f"📌 {st.session_state.selected_date} の掲載企業")
     items = [e for e in all_events if e['start'] == st.session_state.selected_date]
     
+    if not items:
+        st.info("この日のニュースはありません。")
+    
     for item in items:
         p = item['extendedProps']
         with st.expander(f"[{p['source']}] {p['full_title']}"):
             st.write(f"**企業名:** {p['company']}")
             st.markdown(f"🔗 [記事原文を表示]({p['url']})")
             
-            # 日程作成
+            # 日程候補の作成（土日を除外）
             today = date.today()
-            dates = [ (today + timedelta(days=i)).strftime("%m月%d日（%a）09:00～18:00") for i in range(2, 7) if (today + timedelta(days=i)).weekday() < 5]
+            dates = []
+            for i in range(2, 10): # 候補を少し広めに探索
+                target_date = today + timedelta(days=i)
+                if target_date.weekday() < 5: # 平日のみ
+                    dates.append(target_date.strftime("%m月%d日（%a）09:00～18:00"))
+                if len(dates) >= 3: # 3件溜まったら終了
+                    break
+                    
             date_text = "\n".join([f"・{d}" for d in dates])
 
             magic_prompt = f"""あなたは一流コンサルです。以下を分析しアライアンス提案メールを作って。
