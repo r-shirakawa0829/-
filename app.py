@@ -1,101 +1,131 @@
 import streamlit as st
 import feedparser
 from streamlit_calendar import calendar
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import re
+import google.generativeai as genai
 
-st.set_page_config(layout="wide", page_title="中小・スタートアップ B2B Radar")
+st.set_page_config(layout="wide", page_title="B2B Radar & AI Outreach")
 
-# --- セッション状態の初期化（反応を良くするため） ---
+# --- AI設定 (Secretsから取得) ---
+if "GEMINI_API_KEY" in st.secrets:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+else:
+    st.warning("Streamlit CloudのSecretsに GEMINI_API_KEY を登録してください。")
+
+# --- セッション状態の初期化 ---
 if "selected_date" not in st.session_state:
     st.session_state.selected_date = str(date.today())
 
-# --- ニュース取得設定 ---
-SOURCES = {
-    "🚀 スタートアップ(PR TIMES)": "https://prtimes.jp/main/html/index/category_id/44/rdf.xml",
-    "💰 資金調達(THE BRIDGE)": "https://thebridge.jp/feed",
-    "🔍 中小・ベンチャー(Google News)": "https://news.google.com/rss/search?q=(株式会社+OR+合同会社)+(資金調達+OR+SaaS+OR+DX+OR+新サービス)+-NTT+-トヨタ+-ソフトバンク+-ソニー+-日立+-楽天+when:7d&hl=ja&gl=JP&ceid=JP:ja"
-}
-EXCLUDE_KEYWORDS = ["東証プライム", "メガバンク", "上場企業", "NTT", "トヨタ", "ソフトバンク", "ソニー", "パナソニック", "スイーツ", "コスメ", "アパレル", "ゲーム", "個人向け"]
-
+# --- ニュース取得 ---
 @st.cache_data(ttl=3600)
-def fetch_all_data():
+def fetch_b2b_news():
+    feeds = {
+        "🚀 PR TIMES": "https://prtimes.jp/main/html/index/category_id/44/rdf.xml",
+        "💰 THE BRIDGE": "https://thebridge.jp/feed",
+        "🔍 Google News": "https://news.google.com/rss/search?q=(株式会社+OR+合同会社)+(資金調達+OR+SaaS+OR+DX)+-NTT+-トヨタ+-ソフトバンク+-ソニー+when:7d&hl=ja&gl=JP&ceid=JP:ja"
+    }
     all_events = []
-    company_history = {}
-    for label, url in SOURCES.items():
+    for source_name, url in feeds.items():
         feed = feedparser.parse(url)
         for entry in feed.entries:
             title = entry.title
-            summary = entry.get("description", "概要なし").replace("<br />", "\n").split("続きを読む")[0]
-            if any(word in title or word in summary for word in EXCLUDE_KEYWORDS):
-                continue
+            if any(x in title for x in ["東証", "メガバンク", "大企業", "スイーツ", "コスメ"]): continue
+            
             pub_dt = datetime(*entry.published_parsed[:6])
             date_str = pub_dt.strftime('%Y-%m-%d')
-            iso_str = pub_dt.isoformat()
             company_match = re.search(r'([^\s　]+(?:株式会社|合同会社|有限会社)[^\s　]*)', title)
             company_name = company_match.group(0) if company_match else title[:10]
-
-            event = {
-                "title": f"{company_name}", 
+            
+            all_events.append({
+                "title": company_name,
                 "start": date_str,
-                "color": "#FF5722" if "資金調達" in label else "#4CAF50",
                 "extendedProps": {
-                    "full_title": str(title),
-                    "summary": str(summary),
-                    "source": str(label),
-                    "company": str(company_name),
-                    "url": str(entry.link),
-                    "pub_iso": iso_str
+                    "full_title": title,
+                    "summary": entry.get("description", "").replace("<br />", " ").split("続きを読む")[0],
+                    "url": entry.link,
+                    "source": source_name,
+                    "company": company_name
                 }
-            }
-            all_events.append(event)
-            if company_name not in company_history or iso_str < company_history[company_name]:
-                company_history[company_name] = iso_str
-    return all_events, company_history
+            })
+    return all_events
 
-all_events, company_history = fetch_all_data()
+all_events = fetch_b2b_news()
 
-st.title("🚀 中小・スタートアップ B2Bレーダー")
+# --- AIメール作成関数 ---
+def generate_ai_email(p):
+    # 日程提案の自動作成（今日から2日後から5日間、土日除外）
+    today = date.today()
+    proposal_dates = []
+    check_day = today + timedelta(days=2)
+    while len(proposal_dates) < 5:
+        if check_day.weekday() < 5: # 月〜金
+            proposal_dates.append(check_day.strftime("%m月%d日（%a）09:00～18:00"))
+        check_day += timedelta(days=1)
+    
+    date_text = "\n".join([f"・{d}" for d in proposal_dates])
+    
+    prompt = f"""
+    あなたは、企業のビジネスモデルと、その根底にある哲学までを的確に見抜き、心を動かす効果的なコミュニケーション戦略を立案する、超一流のビジネスアナリスト兼マーケティングコンサルタントです。
 
-# --- サイドバーで補助的な日付選択 ---
-with st.sidebar:
-    st.header("日付選択（補助）")
-    side_date = st.date_input("カレンダーの反応が悪い時はこちら", value=date.fromisoformat(st.session_state.selected_date))
-    if str(side_date) != st.session_state.selected_date:
-        st.session_state.selected_date = str(side_date)
-        st.rerun()
+    以下の情報とステップに従い、企業分析とアライアンス提案メールの作成を完璧に実行してください。
 
-# --- メイン：カレンダー表示 ---
-st.header("📅 ニュースカレンダー")
-calendar_options = {
-    "initialView": "dayGridMonth",
-    "selectable": True,
-    "locale": "ja",
-}
-state = calendar(events=all_events, options=calendar_options, key="b2b_calendar")
+    1. 分析対象の情報
+    企業名/サービス名: {p['company']}
+    関連URL: {p['url']}
+    記事タイトル: {p['full_title']}
+    記事概要: {p['summary']}
 
-# カレンダーのクリックを検知
-if state.get("dateClick"):
-    clicked = state["dateClick"]["date"].split("T")[0]
-    if clicked != st.session_state.selected_date:
-        st.session_state.selected_date = clicked
-        st.rerun()
+    【私たちの提供価値・アライアンスの根拠】
+    ・中堅中小企業様を中心に全国13万社の経営者との企業ネットワークを有している。
+    ・貴社と提携することで、ターゲット企業群へのアプローチが可能になり、数千万以上の利益確保に貢献できる。
+    ・私たちのサービス詳細資料: https://docs.google.com/presentation/d/1JeqlwgvQ4uSaDEtVVdrj9-ju7EpXhKOK/edit
 
-st.divider()
+    2. 実行ステップ
+    ステップ0：認識合わせ（対象企業をどう理解したか太字一文で要約）
+    ステップA：ビジネス分析（サービス概要、ターゲット、経営レベルのペインポイントを分析の根拠と共に）
+    ステップB：メール文章のパーツ作成（心を掴む冒頭文3パターン、経営者が頷く悩みリスト3つ）
+    ステップC：メール文章の完成（最も効果的な冒頭文と悩みリストを組み合わせた、そのまま使えるメール作成）
 
-# --- ニュース詳細一覧 ---
-st.header(f"📌 {st.session_state.selected_date} のニュース一覧")
-target_news = [e for e in all_events if e['start'] == st.session_state.selected_date]
-target_news.sort(key=lambda x: "資金調達" in x['extendedProps']['source'], reverse=True)
+    ※候補日程は以下を必ず使用すること：
+    {date_text}
+    """
+    
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    response = model.generate_content(prompt)
+    return response.text
 
-if not target_news:
-    st.info(f"{st.session_state.selected_date} のニュースはありません。他の日を選んでください。")
-else:
-    for item in target_news:
+# --- UI表示 ---
+st.title("🚀 B2Bスタートアップ分析 & 提案ツール")
+
+col1, col2 = st.columns([1, 1.2])
+
+with col1:
+    st.header("📅 ニュースカレンダー")
+    cal = calendar(events=all_events, options={"initialView": "dayGridMonth", "locale": "ja"}, key="cal")
+    if cal.get("dateClick"):
+        clicked = cal["dateClick"]["date"].split("T")[0]
+        if clicked != st.session_state.selected_date:
+            st.session_state.selected_date = clicked
+            st.rerun()
+
+with col2:
+    st.header(f"📌 {st.session_state.selected_date} の掲載企業")
+    items = [e for e in all_events if e['start'] == st.session_state.selected_date]
+    
+    if not items:
+        st.info("この日のニュースはありません。")
+    
+    for item in items:
         p = item['extendedProps']
-        is_new = p['pub_iso'] <= company_history.get(p['company'], p['pub_iso'])
-        badge = "🔴 [NEW!] " if is_new else ""
-        with st.expander(f"{badge}[{p['source']}] {p['full_title']}", expanded=is_new):
-            st.markdown(f"**企業名:** {p['company']}")
-            st.write(f"**内容:** {p['summary'][:300]}...")
-            st.markdown(f"🔗 [この記事を詳しく見る]({p['url']})")
+        with st.expander(f"[{p['source']}] {p['full_title']}"):
+            st.write(f"**企業名:** {p['company']}")
+            st.markdown(f"🔗 [記事原文を表示]({p['url']})")
+            
+            if st.button(f"📧 一流コンサルの提案メールを生成", key=f"btn_{p['url']}"):
+                with st.spinner("ビジネスモデルを深く分析中..."):
+                    result = generate_ai_email(p)
+                    st.divider()
+                    st.subheader("🤖 AI分析 & 提案メール案")
+                    st.markdown(result)
+                    st.text_area("コピペ用（文章全体）", value=result, height=400)
