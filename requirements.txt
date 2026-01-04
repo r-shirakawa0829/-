@@ -1,3 +1,4 @@
 streamlit
 google-generativeai
-streamlit-calendar
+feedparser
+pandas
