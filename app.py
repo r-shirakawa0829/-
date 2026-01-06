@@ -1,55 +1,98 @@
 import streamlit as st
 import feedparser
+from streamlit_calendar import calendar
+from datetime import datetime
 
 # --- 1. ページ基本設定 ---
 st.set_page_config(
     layout="wide", 
-    page_title="B2B ニュースリーダー",
-    page_icon="📰"
+    page_title="B2B ニュースカレンダー",
+    page_icon="📅"
 )
 
-# --- 2. メイン UI ---
-st.title("📰 B2B ニュースリーダー")
-st.markdown("最新のビジネス・スタートアップ関連ニュースを一覧表示します。（要約機能なし・APIキー不要）")
+# --- 2. ニュース取得とカレンダー用データ変換 ---
+@st.cache_data(ttl=3600)  # 1時間はキャッシュを保持
+def get_calendar_events(rss_url):
+    feed = feedparser.parse(rss_url)
+    events = []
+    for entry in feed.entries:
+        # 日付の解析（RSSの形式に合わせて調整）
+        published_parsed = entry.get("published_parsed")
+        if published_parsed:
+            event_date = datetime(*published_parsed[:6]).strftime("%Y-%m-%d")
+            events.append({
+                "title": entry.title,
+                "start": event_date,
+                "url": entry.link,
+                "allDay": True,
+                "extendedProps": {
+                    "summary": entry.get("summary", "")
+                }
+            })
+    return events
 
-# RSSフィードURLの設定（B2B・スタートアップ関連のGoogleニュース）
+# --- 3. メイン UI ---
+st.title("📅 B2B ニュースカレンダー")
+st.markdown("カレンダーの日付をクリックすると、その日に公開された記事の詳細が表示されます。")
+
+# RSSフィードURL
 default_url = "https://news.google.com/rss/search?q=B2B+スタートアップ+日本&hl=ja&gl=JP&ceid=JP:ja"
-target_rss = st.text_input("RSSフィードURL:", default_url)
+all_events = get_calendar_events(default_url)
 
-if st.button("ニュースを更新"):
-    with st.spinner("最新ニュースを取得中..."):
-        # RSSフィードを解析
-        feed = feedparser.parse(target_rss)
+# レイアウトを2カラムに分割
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    # カレンダーの表示設定
+    calendar_options = {
+        "headerToolbar": {
+            "left": "prev,next today",
+            "center": "title",
+            "right": "dayGridMonth",
+        },
+        "initialView": "dayGridMonth",
+        "selectable": True,
+    }
+    
+    # カレンダーコンポーネントの呼び出し
+    state = calendar(
+        options=calendar_options,
+        events=all_events,
+        key='news-calendar',
+    )
+
+with col2:
+    st.subheader("📌 記事詳細")
+    
+    # 日付またはイベントがクリックされた時の処理
+    if state.get("callback") == "dateClick":
+        clicked_date = state["dateClick"]["dateStr"]
+        st.info(f"📅 {clicked_date} のニュース")
         
-        if not feed.entries:
-            st.error("ニュースの取得に失敗しました。URLが正しいか確認するか、しばらく時間を置いて試してください。")
+        # クリックされた日付に一致するニュースを抽出
+        day_news = [e for e in all_events if e["start"] == clicked_date]
+        
+        if not day_news:
+            st.write("この日のニュースは見つかりませんでした。")
         else:
-            st.success(f"最新のニュースを {len(feed.entries[:10])} 件表示します。")
-            st.divider()
-            
-            # ニュースをループで表示（最新10件）
-            for i, entry in enumerate(feed.entries[:10]):
-                with st.container():
-                    # タイトルをリンクにして表示
-                    st.markdown(f"### {i+1}. [{entry.title}]({entry.link})")
-                    
-                    # 公開日があれば表示
-                    if hasattr(entry, 'published'):
-                        st.caption(f"📅 公開日: {entry.published}")
-                    
-                    # 記事の抜粋があれば表示（HTMLタグを除去して短く表示）
-                    summary = entry.get('summary', '')
-                    if summary:
-                        # 簡易的なタグ除去と文字数制限
-                        clean_summary = summary.split('<')[0][:200] 
-                        st.write(clean_summary + "...")
-                    
-                    st.markdown(f"[👉 記事全文をブラウザで開く]({entry.link})")
-                    st.divider()
+            for item in day_news:
+                st.markdown(f"**[{item['title']}]({item['url']})**")
+                # 概要があれば表示
+                summary_text = item['extendedProps']['summary'].split('<')[0][:100]
+                if summary_text:
+                    st.caption(summary_text + "...")
+                st.divider()
+                
+    elif state.get("callback") == "eventClick":
+        # カレンダー上のイベント（青い棒）を直接クリックした場合
+        event = state["eventClick"]["event"]
+        st.success("✅ 記事を選択しました")
+        st.markdown(f"### {event['title']}")
+        st.markdown(f"[👉 記事をブラウザで開く]({event['url']})")
+    else:
+        st.write("カレンダーの日付をクリックしてください。")
 
-# --- 3. サイドバー ---
-with st.sidebar:
-    st.header("設定")
-    st.info("このアプリは外部通信（API）を使用せず、公開されているRSSフィードを直接読み込んでいます。")
-    if st.button("表示をリセット"):
-        st.rerun()
+# --- 4. フッター ---
+st.markdown("---")
+st.caption("※APIキーを使用していないため、AIによる自動要約はありません。")
+st.caption("※RSSで取得可能な最新記事（約20〜30件）のみがカレンダーに表示されます。")
